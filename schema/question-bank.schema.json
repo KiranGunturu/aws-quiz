@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aws-quiz/schema/question-bank.schema.json",
+  "title": "AWS Quiz question bank (one file per service)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "service",
+    "questions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "category"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "Slug, also the file name: lambda, s3, step-functions"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 2
+        },
+        "category": {
+          "enum": [
+            "Compute",
+            "Storage",
+            "Database",
+            "Networking",
+            "Security",
+            "Integration",
+            "Analytics",
+            "AI/ML",
+            "Management",
+            "Developer Tools",
+            "Containers",
+            "Architecture"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 280
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4,
+          "description": "Short tile label on the site, e.g. TLS"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where the questions came from",
+      "properties": {
+        "deck": {
+          "type": "string",
+          "description": "Deck file name the questions were generated from"
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "model": {
+          "type": "string",
+          "description": "Bedrock model id used to draft, if any"
+        }
+      }
+    },
+    "questions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/question"
+      }
+    }
+  },
+  "$defs": {
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "difficulty",
+        "prompt",
+        "options",
+        "answer",
+        "explanation",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+-[0-9]{3}$",
+          "description": "<service-id>-NNN, stable forever once published"
+        },
+        "type": {
+          "enum": [
+            "single",
+            "multi"
+          ]
+        },
+        "style": {
+          "enum": [
+            "recall",
+            "scenario",
+            "best-fit"
+          ],
+          "default": "recall"
+        },
+        "difficulty": {
+          "enum": [
+            "easy",
+            "medium",
+            "hard"
+          ]
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 600
+        },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "text"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-f]$"
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          }
+        },
+        "answer": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-f]$"
+          }
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 800
+        },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "slideRef": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Slide number in the source deck"
+        },
+        "docUrl": {
+          "type": "string",
+          "pattern": "^https://docs\\.aws\\.amazon\\.com/"
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "approved",
+            "rejected"
+          ]
+        },
+        "sourceDeck": {
+          "type": "string",
+          "description": "Deck file the question was generated from (internal)"
+        },
+        "reviewNote": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Why the AI fact-check flagged it, for the human reviewer (internal)"
+        }
+      }
+    }
+  }
+}

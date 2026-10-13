@@ -1,0 +1,13 @@
+{
+  "name": "Kiran Gunturu",
+  "title": "Principal Engineer at a leading fintech",
+  "location": "Charlotte, North Carolina",
+  "links": {
+    "GitHub": "https://github.com/KiranGunturu",
+    "GitLab": "https://gitlab.com/kiran.gntdm-group"
+  },
+  "bio": [
+    "I'm a principal engineer at a leading fintech, based in Charlotte, North Carolina. I design and build data and serverless platforms on AWS.",
+    "I built Know Your Cloud to turn my engineering notes, proofs of concept and project lessons into short quizzes that help other engineers learn AWS."
+  ]
+}

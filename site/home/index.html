@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{NAME}} · {{SHORT_TITLE}}</title>
+  <meta name="description" content="{{DESCRIPTION}}">
+  <link rel="canonical" href="{{HOME_URL}}">
+  <meta property="og:type" content="profile">
+  <meta property="og:title" content="{{NAME}}">
+  <meta property="og:description" content="{{DESCRIPTION}}">
+  <meta property="og:url" content="{{HOME_URL}}">
+  <meta name="twitter:card" content="summary">
+  <meta name="theme-color" content="#14213D">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/home/home.css">
+  <script type="application/ld+json">{{JSON_LD}}</script>
+</head>
+<body>
+  <main class="page">
+    <header class="intro">
+      <span class="mono" aria-hidden="true">{{INITIALS}}</span>
+      <h1>{{NAME}}</h1>
+      <p class="role">{{ROLE_LINE}}</p>
+    </header>
+    <section class="bio">
+{{BIO}}
+    </section>
+    <section>
+      <h2>Projects</h2>
+      <a class="project" href="{{QUIZ_URL}}">
+        <svg class="logo" viewBox="0 0 64 64" width="44" height="44" aria-hidden="true" focusable="false"><circle class="ring" cx="30" cy="30" r="19" fill="none" stroke-width="8"/><path class="knock" d="M34 37l8 8 14-15" fill="none" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/><path class="check" d="M34 37l8 8 14-15" fill="none" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>
+          <strong>Know Your Cloud</strong>
+          <span>{{QUIZ_BLURB}}</span>
+        </span>
+        <span class="arrow" aria-hidden="true">→</span>
+      </a>
+    </section>
+    <section>
+      <h2>Elsewhere</h2>
+      <ul class="links">
+{{LINKS}}
+      </ul>
+    </section>
+  </main>
+  <footer class="foot">© {{YEAR}} {{NAME}}</footer>
+</body>
+</html>

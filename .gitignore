@@ -1,0 +1,37 @@
+# ---- Private content: never pushed ----
+# Source decks and anything derived from them
+decks/
+*.pptx
+*.ppt
+*.potx
+build/
+# Question banks (published and drafts): the site serves these only to signed-in users
+content/questions/
+content/drafts/
+# Internal names the pipeline must never let into a question
+/deny-terms.txt
+# Secrets and local settings
+.env
+
+# ---- Generated output ----
+dist/
+dist-data/
+infra/cdk.out/
+# CDK's lookup cache: holds the AWS account id and hosted zone id
+infra/cdk.context.json
+
+# ---- Python / Node / editors ----
+__pycache__/
+*.pyc
+.venv/
+# the virtual environment created inside the project folder
+/aws-quiz/
+Lib/
+Scripts/
+Include/
+pyvenv.cfg
+node_modules/
+.pytest_cache/
+~$*
+.DS_Store
+Thumbs.db

@@ -1,0 +1,91 @@
+{
+  "questions": [
+    {
+      "type": "single", "style": "scenario", "difficulty": "medium",
+      "prompt": "Audit logs are written once and read maybe twice a year, but must be retrievable within milliseconds when needed. Which storage class fits best?",
+      "options": [
+        {"id": "a", "text": "S3 Glacier Deep Archive"},
+        {"id": "b", "text": "S3 Standard"},
+        {"id": "c", "text": "S3 Standard-IA"},
+        {"id": "d", "text": "S3 Intelligent-Tiering with archive tiers enabled"}
+      ],
+      "answer": ["c"],
+      "explanation": "Standard-IA suits rarely accessed data that still needs immediate access. Deep Archive is cheaper but retrieval takes hours, which breaks the millisecond requirement.",
+      "tags": ["storage-classes"], "slideRef": 3
+    },
+    {
+      "type": "single", "style": "recall", "difficulty": "easy",
+      "prompt": "What happens when you delete an object in a versioning-enabled bucket without specifying a version ID?",
+      "options": [
+        {"id": "a", "text": "All versions are permanently removed"},
+        {"id": "b", "text": "A delete marker is added and older versions remain"},
+        {"id": "c", "text": "The request fails until versioning is suspended"},
+        {"id": "d", "text": "The latest version moves to Glacier"}
+      ],
+      "answer": ["b"],
+      "explanation": "A simple delete adds a delete marker that hides the object; earlier versions stay and can be restored. Permanent removal requires deleting specific version IDs.",
+      "tags": ["versioning"], "slideRef": 4
+    },
+    {
+      "type": "multi", "style": "recall", "difficulty": "medium",
+      "prompt": "Which actions can an S3 lifecycle rule perform? Select two.",
+      "options": [
+        {"id": "a", "text": "Encrypt existing objects with a new KMS key"},
+        {"id": "b", "text": "Transition objects to a cheaper storage class"},
+        {"id": "c", "text": "Abort incomplete multipart uploads"},
+        {"id": "d", "text": "Replicate objects to another region"}
+      ],
+      "answer": ["b", "c"],
+      "explanation": "Lifecycle rules transition, expire, and clean up incomplete multipart uploads. Re-encryption and cross-region copies are handled by other features such as Batch Operations and replication.",
+      "tags": ["lifecycle"], "slideRef": 5
+    },
+    {
+      "type": "single", "style": "best-fit", "difficulty": "hard",
+      "prompt": "A team needs to control who can use the encryption key for a bucket and see key usage in CloudTrail. Which default encryption option fits?",
+      "options": [
+        {"id": "a", "text": "SSE-S3"},
+        {"id": "b", "text": "SSE-KMS"},
+        {"id": "c", "text": "Client-side encryption only"},
+        {"id": "d", "text": "No encryption, rely on Block Public Access"}
+      ],
+      "answer": ["b"],
+      "explanation": "SSE-KMS lets you control key permissions with key policies and logs key use in CloudTrail. SSE-S3 encrypts data but gives you no key-level control or audit trail.",
+      "tags": ["security", "encryption"], "slideRef": 6
+    },
+    {
+      "type": "single", "style": "recall", "difficulty": "easy",
+      "prompt": "Which topic is listed first on the session agenda slide?",
+      "options": [{"id": "a", "text": "Storage classes"}, {"id": "b", "text": "Security"}],
+      "answer": ["a"], "explanation": "BAD: slide 2 was never sent to the model, so this slideRef must be rejected.",
+      "slideRef": 2
+    },
+    {
+      "type": "single", "style": "recall", "difficulty": "easy",
+      "prompt": "Which AWS account hosts the raw zone bucket described in the session?",
+      "options": [{"id": "a", "text": "123456789012"}, {"id": "b", "text": "210987654321"}],
+      "answer": ["a"], "explanation": "BAD: leaks an account id and must be rejected by the leak check.",
+      "slideRef": 7
+    },
+    {
+      "type": "single", "style": "recall", "difficulty": "easy",
+      "prompt": "Which team owns the Acme raw zone bucket?",
+      "options": [{"id": "a", "text": "Data Platform"}, {"id": "b", "text": "Security"}],
+      "answer": ["a"], "explanation": "BAD: internal org detail; rejected via the deny-terms list.",
+      "slideRef": 7
+    },
+    {
+      "type": "single", "style": "recall", "difficulty": "easy",
+      "prompt": "Which settings are on by default for new S3 buckets?",
+      "options": [{"id": "a", "text": "Block Public Access"}, {"id": "b", "text": "Versioning"}, {"id": "c", "text": "Default encryption"}],
+      "answer": ["a", "c"], "explanation": "BAD: single-choice question with two answers must be rejected.",
+      "slideRef": 6
+    },
+    {
+      "type": "single", "style": "recall", "difficulty": "easy",
+      "prompt": "What happens when you delete an object in a versioning-enabled bucket without specifying a version ID?",
+      "options": [{"id": "a", "text": "It is gone"}, {"id": "b", "text": "A delete marker is added"}],
+      "answer": ["b"], "explanation": "BAD: duplicate prompt of an earlier question in the same batch.",
+      "slideRef": 4
+    }
+  ]
+}
