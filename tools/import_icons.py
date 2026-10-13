@@ -33,6 +33,8 @@ ICON_FOR = {
     "app-security": "AWS-WAF",
     "ha-scalability": "Elastic-Load-Balancing",
     "dynamodb": "Amazon-DynamoDB",
+    "transfer-family": "AWS-Transfer-Family",
+    "glue": "AWS-Glue",
 }
 
 

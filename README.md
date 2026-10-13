@@ -52,7 +52,7 @@ same infrastructure by hand, step by step, with every setting and the order to c
 |---|---|
 | A welcome page explains the site; any topic chip goes straight to sign-in. | Signed-out visitors can only see the welcome and About pages. Questions are never public files. |
 | **Continue with Google** (and, once enabled, **Sign up with email**). | Amazon Cognito managed login, authorization code flow with PKCE, no client secret in the browser. |
-| 18 topics, 673 questions: single and multi-select, three difficulty levels, 5/10/20-question quizzes, or a mixed quiz. | Question banks live in a private S3 bucket. The API sends questions **without** answers. |
+| 22 topics, 799 questions: single and multi-select, three difficulty levels, 5/10/20-question quizzes, or a mixed quiz. | Question banks live in a private S3 bucket. The API sends questions **without** answers. |
 | Instant feedback with an explanation and a link to the AWS docs. | The browser sends its picks; a Lambda function grades them and only then returns the answer. |
 | "+1 point" for a correct first answer; weekly and all-time leaderboards. | DynamoDB transactions make sure only the first answer to each question ever counts. |
 | Best scores and "retry missed" follow you to any device. | Progress is stored per Cognito user in DynamoDB. |
@@ -62,14 +62,14 @@ Topics today:
 
 | Category | Topics (questions) |
 |---|---|
-| Compute | AWS Lambda (65), Amazon EC2 (51), EC2 vs Lambda (19), Lambda vs Fargate (17) |
-| Storage | Amazon S3 (74), Amazon EBS (34) |
+| Compute | Amazon EC2 (69), AWS Lambda (65), Serverless vs containers (22), EC2 vs Lambda (19), Lambda vs Fargate (17) |
+| Storage | Amazon S3 (74), Amazon EBS (34), AWS Transfer Family (22) |
 | Database | Amazon DynamoDB (70) |
 | Networking | Amazon API Gateway (64), AWS Networking (36), Amazon CloudFront (30), Amazon Route 53 (19) |
 | Integration | Amazon SQS (41), Amazon SNS (20) |
 | Security | SSL/TLS and the OSI model (31), Application security on AWS (10) |
-| Architecture | High availability and scalability (28) |
-| Analytics | Glue vs Lambda (19) |
+| Architecture | High availability and scalability (28), Disaster recovery on AWS (22) |
+| Analytics | AWS Glue (42), Glue vs Lambda (19) |
 | Developer Tools | Terraform (45) |
 
 ## 2. Architecture at a glance
