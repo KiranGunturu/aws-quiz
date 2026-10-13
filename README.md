@@ -39,6 +39,9 @@ covers the design. Part 2 is the runbook (the commands you actually type).
 **Part 2: Runbook**: validate, generate, review, build, deploy, and the one-time setups (custom
 domain, Google sign-in, email sign-up, Search Console). It starts at [Validate](#validate).
 
+**Prefer clicking through the AWS console?** [docs/console-setup.md](docs/console-setup.md) builds the
+same infrastructure by hand, step by step, with every setting and the order to create things in.
+
 ---
 
 # Part 1: How it works
@@ -162,6 +165,7 @@ aws-quiz/
 │   └── api/
 │       ├── handler.py             the quiz API (one Lambda, five routes)
 │       └── presignup.py           Cognito pre sign-up trigger (account linking)
+├── docs/console-setup.md          build the same infrastructure by hand in the AWS console
 └── tests/                         moto-based API tests, pipeline fixtures
 ```
 
@@ -593,7 +597,8 @@ At hobby traffic the site costs a few dollars a month, mostly fixed items:
 # Part 2: Runbook
 
 The sections below are the operational reference: the commands to run and the one-time console
-steps.
+steps. To build the infrastructure by hand instead of with CDK, follow
+[docs/console-setup.md](docs/console-setup.md).
 
 ## Validate
 
