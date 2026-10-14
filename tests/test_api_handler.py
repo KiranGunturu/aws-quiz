@@ -50,7 +50,10 @@ def H():
         yield handler
 
 
-def call(H, route, sub="u1", username="google_1", body=None, qs=None, path=None):
+def call(H, route, sub="u1", username="google_1", body=None, qs=None, path=None, seen=True):
+    # the site always opens a question (POST /api/start) before answering it; do the same unless told not to
+    if seen and route == "POST /api/answer" and isinstance(body, dict) and isinstance(body.get("qid"), str):
+        call(H, "POST /api/start", sub=sub, username=username, body={"qid": body["qid"]}, seen=False)
     ev = {"routeKey": route, "requestContext": {"authorizer": {"jwt": {"claims": {"sub": sub, "username": username}}}}}
     if body is not None:
         ev["body"] = json.dumps(body)
@@ -189,3 +192,39 @@ def test_presignup_refuses_email_signup_for_google_address(P):
         mod.handler(ev(pool, "PreSignUp_SignUp", "c@example.com", "c@example.com"), None)
     mod._cognito = type("E", (), {"list_users": lambda self, **kw: {"Users": []}})()
     assert mod.handler(ev(pool, "PreSignUp_SignUp", "d@example.com", "d@example.com"), None)["userName"] == "d@example.com"
+
+
+def test_points_need_a_prompt_answer_in_the_foreground(H, monkeypatch):
+    # left the page: graded and explained, but no point, and the first answer is used up
+    code, r = call(H, "POST /api/answer", body={"qid": "s3-001", "picked": ["b"], "left": True})
+    assert code == 200 and r["correct"] and r["explanation"] == "E1"
+    assert r["point"] is False and r["noPoint"] == "left"
+    _, r = call(H, "POST /api/answer", body={"qid": "s3-001", "picked": ["b"]})
+    assert r["point"] is False and r["firstTry"] is False and r["noPoint"] is None
+    # never opened through /api/start (scripted answers): no point
+    _, r = call(H, "POST /api/answer", body={"qid": "s3-002", "picked": ["a", "c"]}, seen=False)
+    assert r["point"] is False and r["noPoint"] == "unseen"
+    # too slow: opened, then answered after the window
+    import time as _t
+    real = _t.time()
+    call(H, "POST /api/start", sub="u2", body={"qid": "s3-001"})
+    monkeypatch.setattr(H.time, "time", lambda: real + H.POINT_WINDOW + 5)
+    _, r = call(H, "POST /api/answer", sub="u2", username="nobody", body={"qid": "s3-001", "picked": ["b"]}, seen=False)
+    assert r["point"] is False and r["noPoint"] == "slow"
+    # nobody scored, so the boards are empty
+    assert call(H, "GET /api/leaderboard", qs={"board": "all"})[1]["top"] == []
+
+
+def test_start_keeps_first_time_but_replaces_stale(H, monkeypatch):
+    import time as _t
+    real = _t.time()
+    call(H, "POST /api/start", body={"qid": "s3-001"})
+    monkeypatch.setattr(H.time, "time", lambda: real + 60)
+    call(H, "POST /api/start", body={"qid": "s3-001"})       # reopening doesn't reset the clock
+    monkeypatch.setattr(H.time, "time", lambda: real + 100)
+    assert H.eligibility("u1", "s3-001", False) == "slow"
+    monkeypatch.setattr(H.time, "time", lambda: real + H.START_REUSE + 10)
+    call(H, "POST /api/start", body={"qid": "s3-001"})       # an hour later it's a fresh view
+    assert H.eligibility("u1", "s3-001", False) is None
+    assert call(H, "POST /api/start", body={"qid": "s3-999"})[0] == 404
+    assert call(H, "POST /api/start", body={"qid": "../x"})[0] == 400

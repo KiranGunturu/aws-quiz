@@ -474,3 +474,7 @@ h2.sub { font-size: var(--step-1); font-stretch: 85%; margin: 2rem 0 .5rem; }
 }
 @keyframes boot-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .boot-ring { animation-duration: 2.4s; } }
+
+/* question text can't be selected or copied (copying into another tool earns no points anyway) */
+.qbody .prompt, .qbody .opt { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.feedback .no-point { font-size: var(--step--1); color: var(--ink-soft); margin: .25rem 0 .5rem; }

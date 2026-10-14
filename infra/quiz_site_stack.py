@@ -396,6 +396,7 @@ class QuizSiteStack(Stack):
         integration = integrations.HttpLambdaIntegration("ApiIntegration", fn)
         for path, methods in (("/api/questions/{id}", [apigw.HttpMethod.GET]),
                               ("/api/answer", [apigw.HttpMethod.POST]),
+                              ("/api/start", [apigw.HttpMethod.POST]),
                               ("/api/leaderboard", [apigw.HttpMethod.GET]),
                               ("/api/progress", [apigw.HttpMethod.GET, apigw.HttpMethod.PUT]),
                               ("/api/profile", [apigw.HttpMethod.GET, apigw.HttpMethod.PUT])):

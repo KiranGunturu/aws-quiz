@@ -1,7 +1,8 @@
 """Quiz API behind an HTTP API JWT authorizer (Cognito access tokens). Payload format 2.0.
 
 GET  /api/questions/{id}   question bank for one topic, WITHOUT answers or explanations
-POST /api/answer           {qid, picked[]} -> graded on the server; returns the answer + explanation
+POST /api/start            {qid} -> notes when this user first saw the question (for the points window)
+POST /api/answer           {qid, picked[], left} -> graded on the server; returns the answer + explanation
                            and awards leaderboard points
 GET  /api/leaderboard      ?board=week|all -> top players plus the caller's own rank
 GET  /api/progress         this user's best scores and missed questions
@@ -11,6 +12,10 @@ PUT  /api/profile          {name} -> set it (email sign-ups have no name until t
 
 Points: one per question, decided by your FIRST answer to it (all-time board), and by your first
 answer to it each week (weekly board). Retakes and option-guessing earn nothing.
+A first answer earns its point only if it comes within POINT_WINDOW seconds of the question being shown
+(POST /api/start) and the page stayed in the foreground ("left": false). Otherwise it's still graded and
+explained, and it still uses up the first answer, but scores nothing. This makes copying questions into
+another tool or device pointless for the leaderboard.
 
 API Gateway rejects requests without a valid token before they reach this code.
 """
@@ -37,6 +42,8 @@ PUBLIC_QUESTION = ("id", "type", "style", "difficulty", "prompt", "options", "ta
 BANK_TTL = 300          # seconds a warm Lambda keeps a question bank
 TOP_N = 25
 WEEK_CREDIT_DAYS = 15   # weekly "already answered" markers expire after this
+POINT_WINDOW = 90       # seconds from first seeing a question to answering it, for a point
+START_REUSE = 3600      # a "seen" timestamp older than this is replaced (new week, coming back later)
 
 _clients = {}
 _banks = {}             # topic -> (loaded_at, {qid: question})
@@ -128,14 +135,14 @@ def _lookup_name(claims):
     return name, bool(first)
 
 
-def award(board, user, qid, correct, name, expires=None):
-    """Record the first answer to qid on this board; add a point if it was right. Returns True if it counted."""
-    credit = {"pk": f"C#{board}#{user}", "sk": qid, "correct": correct}
+def award(board, user, qid, correct, name, expires=None, earns=True):
+    """Record the first answer to qid on this board; add a point if it was right (and earns). True if it counted."""
+    credit = {"pk": f"C#{board}#{user}", "sk": qid, "correct": correct, "ranked": earns}
     if expires:
         credit["expires"] = expires
     items = [{"Put": {"TableName": BOARD_TABLE, "Item": _ddb(credit),
                       "ConditionExpression": "attribute_not_exists(pk)"}}]
-    if correct:
+    if correct and earns:
         items.append({"Update": {
             "TableName": BOARD_TABLE,
             "Key": _ddb({"pk": board, "sk": user}),
@@ -160,11 +167,47 @@ def _ddb(d):
     return {k: ser.serialize(v) for k, v in d.items()}
 
 
+def post_start(claims, event):
+    try:
+        qid = str(read_body(event).get("qid", ""))
+        m = QUESTION_ID.match(qid)
+        if not m:
+            raise ValueError("bad question id")
+    except (ValueError, json.JSONDecodeError) as e:
+        return resp(400, {"message": str(e)})
+    bank = load_bank(m.group(1))
+    if not (bank and qid in bank["questions"]):
+        return resp(404, {"message": "unknown question"})
+    now = int(time.time())
+    try:  # keep the first time it was shown; replace only a stale one
+        client("ddb").Table(BOARD_TABLE).put_item(
+            Item={"pk": f"S#{claims['sub']}", "sk": qid, "started": now, "expires": now + 2 * 86400},
+            ConditionExpression="attribute_not_exists(pk) OR started < :stale",
+            ExpressionAttributeValues={":stale": now - START_REUSE})
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+    return resp(200, {"ok": True, "window": POINT_WINDOW})
+
+
+def eligibility(user, qid, left):
+    """None if this answer may earn a point, otherwise why not."""
+    if left:
+        return "left"
+    seen = client("ddb").Table(BOARD_TABLE).get_item(Key={"pk": f"S#{user}", "sk": qid}).get("Item")
+    if not seen:
+        return "unseen"
+    if time.time() - int(seen["started"]) > POINT_WINDOW:
+        return "slow"
+    return None
+
+
 def post_answer(claims, event):
     try:
         body = read_body(event)
         qid = str(body.get("qid", ""))
         picked = body.get("picked")
+        left = bool(body.get("left", False))
         m = QUESTION_ID.match(qid)
         if not m or not isinstance(picked, list) or not 0 < len(picked) <= 6 \
                 or not all(isinstance(p, str) and OPTION_ID.match(p) for p in picked):
@@ -181,13 +224,16 @@ def post_answer(claims, event):
     name = display_name(claims)
     week = week_key()
     expires = int(time.time()) + WEEK_CREDIT_DAYS * 86400
-    counted = award("ALL", user, qid, correct, name)
-    award(week, user, qid, correct, name, expires=expires)
+    blocked = eligibility(user, qid, left)
+    counted = award("ALL", user, qid, correct, name, earns=blocked is None)
+    award(week, user, qid, correct, name, expires=expires, earns=blocked is None)
     return resp(200, {
         "correct": correct, "answer": q["answer"], "explanation": q.get("explanation", ""),
         "docUrl": q.get("docUrl"), "slideRef": q.get("slideRef"),
-        "point": bool(correct and counted),   # did this answer earn an all-time point
+        "point": bool(correct and counted and blocked is None),   # did this answer earn an all-time point
         "firstTry": counted,
+        "noPoint": blocked if (correct and counted) else None,     # why a right first answer scored nothing
+        "window": POINT_WINDOW,
     })
 
 
@@ -306,6 +352,8 @@ def handler(event, _context):
     route = event["routeKey"]
     if route == "GET /api/questions/{id}":
         return get_questions((event.get("pathParameters") or {}).get("id"))
+    if route == "POST /api/start":
+        return post_start(claims, event)
     if route == "POST /api/answer":
         return post_answer(claims, event)
     if route == "GET /api/leaderboard":

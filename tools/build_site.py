@@ -229,6 +229,9 @@ class DevHandler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):  # noqa: N802
+        if self.path.split("?")[0] == "/api/start":
+            self._body()
+            return self._json(200, {"ok": True, "window": 90})
         if self.path.split("?")[0] != "/api/answer":
             return self._json(404, {"message": "not found"})
         body = self._body()

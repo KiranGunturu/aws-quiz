@@ -169,12 +169,18 @@ async function finishSignIn() {
   return null;
 }
 
+let REFRESHING = null;   // one token refresh at a time, however many API calls are waiting on it
 async function accessToken() {
   if (!SESSION) return null;
   if (Date.now() < SESSION.exp - 60_000) return SESSION.access;
-  try { setSession(await tokenRequest({ grant_type: "refresh_token", refresh_token: SESSION.refresh }), SESSION.refresh); }
-  catch { clearSession(); return null; }
-  return SESSION.access;
+  if (!REFRESHING) {
+    REFRESHING = (async () => {
+      try { setSession(await tokenRequest({ grant_type: "refresh_token", refresh_token: SESSION.refresh }), SESSION.refresh); }
+      catch { clearSession(); }
+    })().finally(() => { REFRESHING = null; });
+  }
+  await REFRESHING;
+  return SESSION ? SESSION.access : null;
 }
 
 function signOut() {
@@ -193,14 +199,26 @@ function signOut() {
 
 /* ---------- API (questions and progress need a signed-in user) ---------- */
 class SignedOut extends Error {}
-async function api(path, opts = {}, retried = false) {
+// Busy or cold backend (throttling, a Lambda starting up, a deploy in progress): try again shortly
+const TRANSIENT = new Set([429, 500, 502, 503, 504]);
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+async function api(path, opts = {}, retried = false, attempt = 0) {
   const headers = { ...(opts.headers || {}) };
   if (authOn()) {
     const token = await accessToken();
     if (!token) throw new SignedOut("signed out");
     headers.authorization = `Bearer ${token}`;
   }
-  const r = await fetch(`api/${path}`, { ...opts, headers, cache: "no-cache" });
+  let r;
+  try { r = await fetch(`api/${path}`, { ...opts, headers, cache: "no-cache" }); }
+  catch (err) {  // network blip
+    if (attempt < 3) { await wait(400 * 3 ** attempt + Math.random() * 300); return api(path, opts, retried, attempt + 1); }
+    throw new Error("You seem to be offline");
+  }
+  if (TRANSIENT.has(r.status) && attempt < 3) {
+    await wait(400 * 3 ** attempt + Math.random() * 300);   // ~0.4s, 1.2s, 3.6s
+    return api(path, opts, retried, attempt + 1);
+  }
   if (r.status === 401 && authOn()) {
     if (!retried && SESSION) { SESSION.exp = 0; return api(path, opts, true); }  // force a refresh once
     clearSession();
@@ -318,8 +336,37 @@ async function questionsFor(id) {
     const b = await loadBank(id);
     return b.questions.map(q => ({ ...q, service: b.service }));
   }
-  const all = await Promise.all(INDEX.services.map(s => questionsFor(s.id)));
-  return all.flat();
+  return mixedPool({});
+}
+
+/* A mixed quiz only needs 5–20 questions, so load a few random topics (2 requests at a time) instead of
+   all of them, and add more only if a difficulty filter leaves too few. "Retry missed" loads just the
+   topics those questions came from. Keeps a single visitor well inside small Lambda concurrency limits. */
+const MIXED_BATCH = 2;
+async function loadTopics(ids) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += MIXED_BATCH) {
+    out.push(...(await Promise.all(ids.slice(i, i + MIXED_BATCH).map(questionsFor))));
+  }
+  return out.flat();
+}
+async function mixedPool({ length, difficulty, only }) {
+  if (only) {
+    const topics = [...new Set(only.map(qid => qid.replace(/-\d+$/, "")))]
+      .filter(t => INDEX.services.some(s => s.id === t));
+    return loadTopics(topics);
+  }
+  const want = length || 10;
+  const order = shuffle(INDEX.services.map(s => s.id));
+  const keep = (q) => !difficulty || difficulty === "any" || q.difficulty === difficulty;
+  let pool = [], next = 0;
+  const first = Math.min(order.length, Math.max(6, Math.ceil(want / 2)));  // spread across topics
+  while (next < order.length && (next < first || pool.filter(keep).length < want)) {
+    const batch = order.slice(next, next + (next < first ? first : MIXED_BATCH));
+    next += batch.length;
+    pool = pool.concat(await loadTopics(batch));
+  }
+  return pool;
 }
 
 /* The logo lives once in index.html; views clone it (SVG can't be built with createElement). */
@@ -548,7 +595,7 @@ async function startQuiz(id, opts) {
   try { await buildQuiz(id, opts); } catch (err) { console.error(err); viewError(err); }
 }
 async function buildQuiz(id, { length, difficulty, only } = {}) {
-  let pool = await questionsFor(id);
+  let pool = id === "mixed" ? await mixedPool({ length, difficulty, only }) : await questionsFor(id);
   if (only) pool = pool.filter(q => only.includes(q.id));
   else if (difficulty && difficulty !== "any") pool = pool.filter(q => q.difficulty === difficulty);
   pool = shuffle(pool).slice(0, length || pool.length);
@@ -567,7 +614,13 @@ async function buildQuiz(id, { length, difficulty, only } = {}) {
   else location.hash = target;
 }
 
+const NO_POINT = {
+  left: "No leaderboard point: the page went to the background while this question was open.",
+  slow: (w) => `No leaderboard point: answered after ${w || 90} seconds.`,
+  unseen: "No leaderboard point for this answer.",
+};
 function viewQuestion() {
+  if (run.watch) run.watch.abort();
   const q = run.questions[run.i];
   const n = run.questions.length;
   const multi = q.type === "multi";
@@ -601,6 +654,18 @@ function viewQuestion() {
   const feedbackSlot = h("div", { "aria-live": "polite" });
   const button = h("button", { class: "btn primary", type: "button" }, "Check answer");
 
+  // Leaderboard fairness: note when this question was first shown, and whether the page went to the
+  // background (another tab or app) or lost focus for more than 2 seconds before it was answered.
+  const opened = api("start", { method: "POST", headers: { "content-type": "application/json" },
+                                body: JSON.stringify({ qid: q.id }) }).catch(() => null);
+  let left = false, blurTimer = null;
+  const watch = run.watch = new AbortController();
+  const away = () => { if (!locked && !checking) left = true; };
+  document.addEventListener("visibilitychange", () => { if (document.hidden) away(); }, { signal: watch.signal });
+  window.addEventListener("blur", () => { blurTimer = setTimeout(away, 2000); }, { signal: watch.signal });
+  window.addEventListener("focus", () => clearTimeout(blurTimer), { signal: watch.signal });
+  watch.signal.addEventListener("abort", () => clearTimeout(blurTimer));
+
   async function check() {
     if (checking) return;
     if (picked.size === 0) { error.textContent = multi ? `Choose ${need} answers first.` : "Choose an answer first."; return; }
@@ -611,8 +676,9 @@ function viewQuestion() {
     button.textContent = "Checking…";
     let res;
     try {
+      await opened;
       res = await api("answer", { method: "POST", headers: { "content-type": "application/json" },
-                                   body: JSON.stringify({ qid: q.id, picked: [...picked] }) });
+                                   body: JSON.stringify({ qid: q.id, picked: [...picked], left }) });
     } catch (err) {
       checking = false;
       button.disabled = false;
@@ -641,6 +707,8 @@ function viewQuestion() {
     feedbackSlot.append(h("div", { class: `feedback ${correct ? "good" : "bad"}` },
       h("h2", {}, correct ? "Correct" : multi ? "Not quite: all correct answers are needed" : "Not quite",
         res.point && h("span", { class: "pt" }, "+1 point")),
+      res.noPoint && NO_POINT[res.noPoint] && h("p", { class: "no-point" },
+        typeof NO_POINT[res.noPoint] === "function" ? NO_POINT[res.noPoint](res.window) : NO_POINT[res.noPoint]),
       h("p", {}, res.explanation),
       (docUrl || refs.length) && h("p", { class: "refs" }, refs.join(" "),
         docUrl && [refs.length ? " " : "", h("a", { href: docUrl, target: "_blank", rel: "noopener" }, "Read the AWS docs")])));
@@ -648,6 +716,7 @@ function viewQuestion() {
     button.focus();
   }
   function next() {
+    watch.abort();
     run.i += 1;
     run.i < n ? viewQuestion() : viewResults();
   }
@@ -658,7 +727,8 @@ function viewQuestion() {
     h("div", { class: "meta" },
       h("span", {}, `Question ${run.i + 1} of ${n}`),
       h("span", {}, `${run.id === "mixed" ? shortName(q.service.name) + " · " : ""}${q.difficulty}`)),
-    h("div", { class: "qbody" },
+    h("div", { class: "qbody", oncopy: (e) => e.preventDefault(), oncut: (e) => e.preventDefault(),
+               oncontextmenu: (e) => e.preventDefault(), ondragstart: (e) => e.preventDefault() },
       h("p", { class: "prompt", id: "prompt" }, q.prompt),
       multi && h("p", { class: "hint" }, `Choose ${need}.`),
       list),
@@ -739,8 +809,8 @@ async function viewLeaderboard(which = "week") {
   main.replaceChildren(h("div", { class: "wrap narrow" },
     h("a", { class: "back", href: "#/" }, "All services"),
     h("h1", { class: "page-title" }, "Leaderboard"),
-    h("p", { class: "lede" }, "One point for each question you get right on your first try. " +
-      "The weekly board starts fresh every Monday."),
+    h("p", { class: "lede" }, "One point for each question you get right on your first try, answered within " +
+      "90 seconds without leaving the page. The weekly board starts fresh every Monday."),
     namePrompt(() => viewLeaderboard(which)),
     h("div", { class: "filters board-tabs", role: "group", "aria-label": "Period" },
       tab("week", "This week"), tab("all", "All time")),
@@ -797,16 +867,23 @@ function viewNotFound() {
 
 function viewError(err) {
   if (err instanceof SignedOut) { renderHeader(); return viewWelcome("Your session ended. Please sign in again."); }
+  const local = location.protocol === "file:";
   main.replaceChildren(h("div", { class: "wrap narrow" },
-    h("h1", {}, "Questions didn't load"),
-    h("p", { class: "lede" }, `${err.message}. If you opened index.html straight from disk, serve the folder ` +
-      "instead (python -m http.server) because browsers block loading data from file:// pages.")));
+    h("h1", { class: "page-title" }, "That didn't load"),
+    h("p", { class: "lede" }, local
+      ? "Browsers block loading data from file:// pages. Serve the folder instead (python tools/build_site.py --serve)."
+      : "The quiz server is busy or briefly unavailable. Please try again in a moment."),
+    !local && h("div", { class: "actions" },
+      h("button", { type: "button", class: "btn primary", onclick: () => route() }, "Try again"),
+      h("a", { class: "btn ghost", href: "#/" }, "All topics")),
+    h("p", { class: "note" }, `Details: ${err.message}`)));
+  focusMain();
 }
 
 /* ---------- routing ---------- */
 let SIGNIN_MESSAGE = null;
 async function route() {
-  if (run) run.keyHandler = null;
+  if (run) { run.keyHandler = null; if (run.watch) run.watch.abort(); }
   const [, view, id] = location.hash.replace(/^#\/?/, "#/").split("/");
   try {
     await Promise.all([loadIndex(), loadAuthor(), loadConfig()]);

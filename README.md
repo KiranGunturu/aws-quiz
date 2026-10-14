@@ -35,6 +35,7 @@ covers the design. Part 2 is the runbook (the commands you actually type).
 14. [Security model](#14-security-model)
 15. [Cost](#15-cost)
 16. [Design decisions and lessons learned](#16-design-decisions-and-lessons-learned)
+17. [Incident: 503s from a 10-concurrency Lambda quota](#17-incident-503s-from-a-10-concurrency-lambda-quota)
 
 **Part 2: Runbook**: validate, generate, review, build, deploy, and the one-time setups (custom
 domain, Google sign-in, email sign-up, Search Console). It starts at [Validate](#validate).
@@ -428,7 +429,8 @@ identity only from the verified token claims (`sub`), never from the request bod
 | Route | What it does |
 |---|---|
 | `GET /api/questions/{topic}` | The topic's questions **without** `answer` and `explanation`; adds `need` (how many options to pick) |
-| `POST /api/answer` | `{qid, picked[]}` → grades on the server, records points, returns the answer and explanation |
+| `POST /api/start` | `{qid}` → records when the user first opened the question (starts the 90-second points window) |
+| `POST /api/answer` | `{qid, picked[], left}` → grades on the server, records points, returns the answer and explanation |
 | `GET /api/leaderboard?board=week\|all` | Top 25 with competition ranking, plus the caller's own rank |
 | `GET /api/progress` / `PUT /api/progress` | Best score per topic and missed question IDs |
 | `GET /api/profile` / `PUT /api/profile` | Leaderboard name, and whether the user still needs to choose one |
@@ -488,6 +490,11 @@ erDiagram
   `attribute_not_exists(pk)`, in the same transaction as the `ADD points :one`. A second answer to the
   same question cancels the whole transaction, so retakes, retries and guessing every option earn
   nothing, even with parallel requests.
+- **Points need a prompt answer, in the foreground.** A right first answer scores only if it arrives within
+  90 seconds of `POST /api/start` and the page never went to the background (`left: false`, set by the browser on a
+  tab or app switch, or more than 2 seconds without focus). Otherwise it's still graded and explained, and still
+  uses up the first answer, but scores nothing. Question text can't be selected or copied. Together these make
+  pasting questions into another tool pointless for the leaderboard; `S#<sub>` items hold the "first seen" times.
 - **Ranking without scans.** The `byPoints` GSI (`pk` + `points`) returns the top 25 of a board in one
   query. Your own rank is 1 + the number of players with more points, a `COUNT` query on the same
   index. Credit markers have no `points` attribute, so they never enter the index.
@@ -591,6 +598,61 @@ At hobby traffic the site costs a few dollars a month, mostly fixed items:
 - **Honest credibility.** The site says what the questions are built from (real projects, proofs
   of concept, engineering notes), that answers are checked against the AWS docs, and that they are
   reviewed and corrected over time. It doesn't claim more than that.
+
+## 17. Incident: 503s from a 10-concurrency Lambda quota
+
+**What happened.** A friend in India opened the quiz and got "Questions didn't load … returned 503". The site
+worked for me, and nothing was deployed at the time.
+
+**Why.** Two things combined:
+
+1. **The account's Lambda concurrency limit was 10, not 1,000.** New AWS accounts start with reduced quotas,
+   which AWS raises over time as the account is used.
+   `aws lambda get-account-settings --query "AccountLimit.ConcurrentExecutions"` returned `10`.
+2. **The mixed quiz requested every topic at once.** Starting a mixed quiz fetched all 22 question banks
+   in parallel, so a single visitor could ask for 22 concurrent Lambda executions. Anything past 10 was
+   throttled, API Gateway returned a 5xx, and the page gave up on the first failure. A token refresh at the
+   same moment made it worse: every one of those requests tried to refresh the token on its own.
+
+Where the user was had nothing to do with it. CloudFront's price class (North America and Europe edges)
+only adds latency for visitors in India; it doesn't cause errors.
+
+```mermaid
+flowchart LR
+    subgraph Before
+        B1["Mixed quiz"] -->|"22 requests at once"| L1{"Lambda<br/>limit 10"}
+        L1 -->|"10 run"| OK1["200"]
+        L1 -->|"12 throttled"| E1["5xx → 'Questions didn't load'"]
+    end
+    subgraph After
+        B2["Mixed quiz"] -->|"~6 random topics,<br/>2 at a time"| L2{"Lambda<br/>limit 10 (→ 1,000)"}
+        L2 --> OK2["200"]
+        L2 -.->|"rare 429/5xx"| R2["retry with backoff<br/>0.4s, 1.2s, 3.6s"] -.-> L2
+    end
+```
+
+**How it was fixed.**
+
+| Layer | Change |
+|---|---|
+| Quota | Requested the standard 1,000 concurrent executions (Service Quotas → AWS Lambda → Concurrent executions, quota code `L-B99A9384`). |
+| Mixed quiz | Loads about 6 random topics, 2 requests at a time, and adds more only if a difficulty filter leaves too few questions. "Retry missed" loads only the topics those questions came from. A mixed quiz went from 22 concurrent requests to at most 2. |
+| API client | Retries 429, 500, 502, 503 and 504 responses and network errors up to 3 times with exponential backoff and jitter (~0.4 s, 1.2 s, 3.6 s). |
+| Sign-in | Concurrent requests share one token refresh instead of each refreshing on its own. |
+| Error page | Says the server is busy and offers **Try again**, instead of a developer message about `file://` pages. |
+
+**How it was verified.** A local mock API returned 503 for the first three requests: the mixed quiz still
+started, with at most 2 requests in flight. With the API down entirely, the friendly error page appeared.
+To confirm in AWS, check the function's `Throttles` metric in CloudWatch.
+
+**Lessons.**
+
+- **Check account quotas before you share a link.** New accounts are not sized like the documentation's
+  defaults. Lambda concurrency, SES sending and EC2 vCPUs all start lower.
+- **Fan-out from the browser is fan-out on your backend.** `Promise.all` over 22 URLs is 22 concurrent
+  Lambdas. Load only what the screen needs, and cap parallelism.
+- **Clients should expect transient failures.** Throttling, cold starts and deploys all produce brief
+  5xx responses. A small, bounded retry turns them into a pause instead of an error page.
 
 ---
 
