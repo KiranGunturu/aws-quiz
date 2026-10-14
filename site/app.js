@@ -223,8 +223,13 @@ function mergeProgress(a, b) {
   for (const [k, ids] of Object.entries(b.missed || {})) out.missed[k] = [...new Set([...(out.missed[k] || []), ...ids])];
   return out;
 }
-async function loadProgress() {
-  if (STORE) return STORE;
+let PROGRESS_LOAD = null;   // one request in flight at a time
+function loadProgress() {
+  if (STORE) return Promise.resolve(STORE);
+  if (!PROGRESS_LOAD) PROGRESS_LOAD = fetchProgress().finally(() => { PROGRESS_LOAD = null; });
+  return PROGRESS_LOAD;
+}
+async function fetchProgress() {
   STORE = await api("progress");
   STORE.best = STORE.best || {};
   STORE.missed = STORE.missed || {};
@@ -813,6 +818,16 @@ async function route() {
       if (view && !msg) return startSignIn("signin", location.hash);
       if (view) history.replaceState(null, "", `${location.pathname}#/`);
       return viewWelcome(msg);
+    }
+    if (!view && !STORE) {
+      // Draw the topic list right away; best-score bars and the name prompt fill in when the API answers
+      // (a cold Lambda or a token refresh can take a few seconds on a phone).
+      viewHome();
+      await Promise.all([loadProgress(), loadProfile()]);
+      const search = document.querySelector(".search");
+      const untouched = !search || (!search.value && document.activeElement !== search);
+      if (location.hash.replace(/^#\/?/, "") === "" && untouched) viewHome();
+      return;
     }
     await Promise.all([loadProgress(), loadProfile()]);
     if (!view) return viewHome();
