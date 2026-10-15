@@ -83,13 +83,6 @@ behavior, and the arrow from CloudFront (3) to API Gateway (10) is the `/api/*` 
 | **CloudFront Function** | Runs (homepage or quiz) | Not attached |
 | **HTTP** | Redirected to HTTPS | HTTPS only |
 
-**Why put the API behind CloudFront at all?** The browser only ever talks to `cloud.kirangunturu.com`, which means:
-
-- **No CORS.** The page and the API share one origin, so there is no extra preflight call.
-- **A tighter security policy.** The CSP can say `connect-src 'self'`.
-- **A hidden endpoint.** The real `execute-api` URL never appears in the browser.
-- **One certificate and a nearby connection.** A single ACM certificate covers both, and API calls start at the nearest edge.
-
 **Signing in**
 
 7. **Cognito.** You click **Continue with Google** or **Sign up with email**. The browser goes to Cognito's sign-in
@@ -99,6 +92,97 @@ behavior, and the arrow from CloudFront (3) to API Gateway (10) is the `/api/*` 
    and an email account share the same address, it joins them so you keep one account and one score.
 9. **SES.** If you signed up with email, Cognito sends your verification code through SES, from
    `no-reply@kirangunturu.com`.
+
+#### How sign-in works, step by step
+
+[![Cognito sign-in flow](docs/cognito-sign-in.png)](docs/cognito-sign-in.png)
+
+A few words first:
+
+- **User pool:** Cognito's list of everyone who has signed in. Each person gets a unique ID called `sub`,
+  and scores in DynamoDB are stored under it.
+- **Identity provider:** someone else who checks the password, here Google. Cognito trusts Google's answer.
+- **Token:** a signed text string (a JWT) that proves who you are. Like a wristband at an event: you show
+  ID once at the gate, then just show the wristband.
+
+**What starts it.** Four things in the app start sign-in, and all of them call the same function,
+`startSignIn()` in `app.js`:
+
+| What you click | Where you land | Route |
+|---|---|---|
+| **Continue with Google** | Straight on Google's page. The app tells Cognito "use Google," so Cognito's own page is skipped. | Google |
+| **Sign up with email** | Cognito's sign-up form. You choose a password and SES (9) emails you a code to confirm the address. | Email |
+| **Sign in** (top bar) | Cognito's sign-in page, which offers Google and email | Either |
+| **Picking a topic while signed out** | Same as Sign in, then straight back to that topic | Either |
+
+It also starts when your 30-day refresh token runs out and an API call fails.
+
+**Before step a: the app makes a secret.** The quiz app's JavaScript, in your browser, creates a random
+48-character secret (the `verifier`) and keeps it in the tab's sessionStorage. It sends Cognito only a
+SHA-256 hash of it (the `code_challenge`). Hashing is one-way, so seeing the hash does not reveal the secret.
+It also makes a random `state` value, which Cognito sends back unchanged so the app knows the reply belongs
+to a sign-in this tab started.
+
+**a. Open the sign-in page.** This is a page redirect, not an API call. The browser leaves the site and opens:
+
+```
+https://auth.kirangunturu.com/oauth2/authorize
+    ?client_id=<app client ID>
+    &response_type=code               "give me a one-time code, not tokens"
+    &scope=openid email               "tell me who this is and their email"
+    &redirect_uri=https://cloud.kirangunturu.com/   where to come back to
+    &state=<random state>
+    &code_challenge=<hash of the secret>
+    &code_challenge_method=S256
+    &identity_provider=Google         only for Continue with Google
+```
+
+Sign up with email uses `/signup` instead of `/oauth2/authorize`, with the same parameters.
+
+**b and c. Google route.** Cognito sends the browser on to Google. You type your password on Google's own
+page, so the quiz and Cognito never see it. Google tells Cognito who you are.
+
+**Email route (instead of b and c).** Cognito shows its own form. New accounts get a verification code by
+SES (9).
+
+**First visit.** Cognito adds you to the user pool and runs the pre sign-up Lambda (8), which joins a Google
+sign-in and an email account that share an address, so you keep one account and one score.
+
+**d. Back with a one-time code.** Cognito redirects the browser to `cloud.kirangunturu.com/?code=...&state=...`.
+The code is like a claim ticket, not a token.
+
+**e. Swap the code for tokens.** The app sends the code plus the original secret to Cognito. Cognito hashes
+the secret and checks it matches the hash from step a. This check is called **PKCE**: a stolen code is useless
+without the secret, which never left the tab. If it matches, Cognito returns three tokens:
+
+| Token | What it's for | Lasts |
+|---|---|---|
+| ID token | Who you are (the app reads your email from it) | 1 hour |
+| Access token | The "wristband", sent with every `/api/*` call | 1 hour |
+| Refresh token | Gets new ID and access tokens without signing in again | 30 days |
+
+They are kept in the browser's localStorage.
+
+**f. Call the API.** Every API call carries `Authorization: Bearer <access token>`. API Gateway (10) checks it
+without calling Cognito: it downloads Cognito's public key once, then checks the signature, that the token
+came from this user pool, that it was issued for this app's client ID, and that it hasn't expired. If all pass,
+the quiz Lambda (11) reads your `sub` from the token to know whose progress to load.
+
+**g. Refresh.** After an hour the access token expires. The app quietly uses the refresh token to get new
+ones, which is why you stay signed in for a month.
+
+**Why go through Cognito and not straight to Google?**
+
+1. **One account system.** Google users and email users end up in the same user pool with the same kind of
+   `sub` and tokens, and accounts with the same address can be linked.
+2. **The API trusts one issuer.** The authorizer only needs to know the Cognito user pool, whichever button
+   you used.
+3. **The Google client secret stays off the browser.** Swapping Google's code needs the Google client secret,
+   and anything in `app.js` is public. Cognito does that swap on the server side with the secret from Secrets
+   Manager (14).
+4. **Sessions are handled for you.** Cognito issues the refresh token and decides how long you stay signed in.
+5. **New sign-in options are just configuration.** Apple, Microsoft or a company login could be added in
+   Cognito without changing the app or the API.
 
 **Taking a quiz**
 
