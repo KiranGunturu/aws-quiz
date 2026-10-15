@@ -47,9 +47,10 @@ The numbers below match the numbers on the diagram.
 
 #### Which CloudFront behavior handles a request
 
-[![Which CloudFront behavior handles each request](docs/cloudfront-behaviors.png)](docs/cloudfront-behaviors.png)
+[![CloudFront origins and behaviors](docs/cloudfront-origins-behaviors.png)](docs/cloudfront-origins-behaviors.png)
 
-CloudFront picks a behavior by the URL path alone. Paths that start with `/api/` use the API behavior;
+The distribution has **two origins** (the S3 site bucket and API Gateway) and **two behaviors** (path patterns),
+and each behavior sends its requests to one origin. CloudFront picks a behavior by the URL path alone. Paths that start with `/api/` use the API behavior;
 everything else uses the default. The numbers match the architecture diagram.
 
 **Default behavior: the page loads (1 → 3 → 4 → 6).**
