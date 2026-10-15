@@ -77,7 +77,7 @@ behavior, and the arrow from CloudFront (3) to API Gateway (10) is the `/api/*` 
 | | Default (`*`) → S3 | `/api/*` → API Gateway |
 |---|---|---|
 | **What's returned** | The same files for everyone | Your own data (progress, score, unanswered questions) |
-| **Caching** | On. The edge keeps copies. | Off. A cached answer could show your score to someone else. |
+| **Caching** | On. The edge keeps copies. | Off. Every user calls the same URL (for example `/api/progress`) but gets different data. The cache key is the URL, not your token, so a cached copy of your progress would be served to the next user. Adding the token to the key would not help either: each copy serves one person and goes stale as soon as you answer a question. |
 | **Methods** | GET and HEAD only | GET, POST and PUT |
 | **Headers forwarded** | None, so everyone shares one cached copy | `Authorization` and query strings. `Host` is dropped because API Gateway only accepts its own host name. |
 | **CloudFront Function** | Runs (homepage or quiz) | Not attached |
