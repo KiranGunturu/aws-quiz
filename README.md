@@ -78,57 +78,9 @@ Topics today:
 Everything runs in one AWS account, in **us-east-1** (required for CloudFront certificates), and is
 created by a single CDK stack, `AwsQuizSite`.
 
-```mermaid
-flowchart LR
-    subgraph Users["People"]
-        V["Visitor's browser"]
-        G["Googlebot"]
-    end
+![Know Your Cloud architecture](docs/architecture.png)
 
-    subgraph DNS["Route 53 · kirangunturu.com"]
-        R53["A/AAAA aliases<br/>DKIM, MAIL FROM, DMARC<br/>Search Console TXT"]
-    end
-
-    subgraph Edge["Amazon CloudFront (one distribution)"]
-        HR["CloudFront Function<br/>HostRouter"]
-        SH["Response headers policy<br/>CSP, HSTS, no framing"]
-    end
-
-    subgraph Static["Static hosting"]
-        S3Site[("S3 site bucket<br/>private, OAC only")]
-    end
-
-    subgraph API["Quiz API"]
-        HTTP["API Gateway HTTP API<br/>JWT authorizer, throttled"]
-        FN["Lambda: handler.py<br/>Python 3.12, arm64"]
-        S3Data[("S3 question bucket<br/>private")]
-        DDBP[("DynamoDB<br/>Progress")]
-        DDBL[("DynamoDB<br/>Leaderboard + byPoints GSI")]
-    end
-
-    subgraph Identity["Sign-in"]
-        COG["Amazon Cognito user pool<br/>managed login at auth.kirangunturu.com"]
-        GOOG["Google OAuth"]
-        PRE["Lambda: presignup.py<br/>account linking"]
-        SES["Amazon SES<br/>no-reply@kirangunturu.com"]
-        SM[("Secrets Manager<br/>Google client secret")]
-    end
-
-    V -->|HTTPS| R53 --> Edge
-    G -->|crawl| Edge
-    Edge -->|"/ and assets"| S3Site
-    Edge -->|"/api/*"| HTTP --> FN
-    FN --> S3Data
-    FN --> DDBP
-    FN --> DDBL
-    FN -->|"AdminGetUser / names"| COG
-    V <-->|"PKCE sign-in, tokens"| COG
-    COG <-->|federation| GOOG
-    COG -.->|"pre sign-up trigger"| PRE
-    COG -.->|"verification codes"| SES
-    SM -.->|"read at deploy time"| COG
-    HTTP -.->|"validates tokens from"| COG
-```
+*Editable source: [docs/architecture.drawio](docs/architecture.drawio) (open in [diagrams.net](https://app.diagrams.net)).*
 
 Three ideas carry the whole design:
 
@@ -188,24 +140,13 @@ Questions come from two sources:
   review gates as the generated ones.
 
 ```mermaid
-flowchart TD
-    D["Deck .pptx"] --> X["extract.py<br/>slide text + speaker notes<br/>skips Agenda, Q&A, Thank you"]
-    D --> SAN["sanitize.py<br/>de-branded copy: no logos,<br/>footers, slide numbers, banners"]
-    SAN --> REN["render.py<br/>PowerPoint or LibreOffice → PNG<br/>for diagrams and screenshots"]
-    X --> GEN
-    REN --> GEN["generate.py<br/>Bedrock Converse API<br/>forced tool use → structured JSON"]
-    GEN --> CHK{"Guardrails"}
-    CHK -->|"schema + semantic rules"| OK1["valid"]
-    CHK -->|"slideRef was actually sent"| OK1
-    CHK -->|"no 12-digit account ids,<br/>no deny-listed internal terms"| OK1
-    CHK -->|"not a duplicate"| OK1
-    CHK -->|"fails any check"| DROP["dropped, with the reason"]
-    OK1 --> FC["factcheck.py<br/>second Bedrock pass,<br/>never sees the slides"]
-    FC -->|"passes"| PUB[("content/questions/<topic>.json<br/>status: approved")]
-    FC -->|"flagged: wrong answer, ambiguous,<br/>outdated, internal detail..."| DR[("content/drafts/<topic>.json<br/>with reviewNote")]
-    DR --> REV["review.py<br/>human: approve / reject / edit"]
-    REV --> PUB
-    HAND["Hand-authored banks<br/>notes, AWS docs, project lessons"] --> VAL["validate.py"] --> PUB
+flowchart LR
+    D["Deck .pptx"] --> P["Extract text,<br/>de-brand, render"] --> G["Bedrock: generate<br/>(forced tool use)"] --> V{"Guardrails"}
+    V -->|fail| X["Dropped"]
+    V -->|pass| F["Bedrock fact-check<br/>(no slides)"]
+    F -->|clean| Q[("Published bank")]
+    F -->|flagged| R["Human review"] --> Q
+    H["Hand-written banks"] --> Q
 ```
 
 How the guardrails work:
@@ -298,22 +239,12 @@ homepage). The bare domain must exist anyway: Cognito only accepts `auth.kirangu
 parent domain has an A record. A CloudFront Function decides what each request gets:
 
 ```mermaid
-flowchart TD
-    REQ["Viewer request"] --> P{"Path starts with /api/ ?"}
-    P -->|yes| API["/api/* behavior<br/>no caching, forwards Authorization<br/>→ API Gateway"]
-    P -->|no| H{"Host header"}
-    H -->|"kirangunturu.com"| A{"Path"}
-    A -->|"/ or /index.html"| HOME["serve /home/index.html"]
-    A -->|"/robots.txt, /sitemap.xml"| HSEO["serve /home/robots.txt, /home/sitemap.xml"]
-    A -->|"/home/*, /favicon.svg"| HASSET["serve as is"]
-    A -->|"anything else"| R1["301 → https://cloud.kirangunturu.com/same/path"]
-    H -->|"cloud.kirangunturu.com"| C{"Path"}
-    C -->|"/home/ or /home/index.html"| R2["301 → https://kirangunturu.com/"]
-    C -->|"anything else"| QUIZ["S3: the quiz files"]
-    HOME --> S3[("S3 site bucket")]
-    HSEO --> S3
-    HASSET --> S3
-    QUIZ --> S3
+flowchart LR
+    R["Request"] --> A{"/api/*?"}
+    A -->|yes| API["API Gateway<br/>(no cache)"]
+    A -->|no| H{"Host"}
+    H -->|kirangunturu.com| HP["/ : homepage<br/>else: 301 to quiz"]
+    H -->|cloud.kirangunturu.com| Q["Quiz files<br/>/home: 301 to apex"]
 ```
 
 Every response, including API responses, gets the same security headers:
@@ -331,25 +262,17 @@ never sees a password.
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    participant B as Browser (app.js)
-    participant C as Cognito managed login<br/>auth.kirangunturu.com
+    participant B as Browser
+    participant C as Cognito (auth.)
     participant G as Google
-    participant API as API Gateway + Lambda
-
-    B->>B: make code_verifier + state,<br/>keep them in sessionStorage
-    B->>C: /oauth2/authorize?identity_provider=Google<br/>&code_challenge=SHA256(verifier)&state=...
-    C->>G: redirect to Google sign-in
-    G->>C: /oauth2/idpresponse (Google's code)
-    C->>C: create or update the user,<br/>map email, given_name, family_name
-    C->>B: redirect to https://cloud.kirangunturu.com/?code=...&state=...
-    B->>B: check state matches
-    B->>C: POST /oauth2/token (code + code_verifier)
-    C->>B: access, ID and refresh tokens
-    B->>B: store in localStorage, remove ?code from the URL
-    B->>API: GET /api/progress<br/>Authorization: Bearer access_token
-    API->>API: JWT authorizer checks signature,<br/>issuer, expiry, client_id
-    API->>B: 200 with this user's data
+    participant A as API
+    B->>C: authorize (PKCE challenge)
+    C->>G: Google sign-in
+    G-->>C: user profile
+    C-->>B: redirect with ?code
+    B->>C: code + verifier
+    C-->>B: access, ID, refresh tokens
+    B->>A: request with Bearer token
 ```
 
 Details worth knowing:
@@ -376,23 +299,7 @@ only email real people after AWS moves the account out of the SES sandbox:
 
 ```mermaid
 flowchart LR
-    subgraph D1["Deploy 1 (automatic with HOSTED_ZONE)"]
-        I["SES domain identity<br/>kirangunturu.com"]
-        K["3 DKIM CNAMEs"]
-        M["mail.kirangunturu.com<br/>MX + SPF"]
-        DM["_dmarc TXT<br/>p=quarantine"]
-    end
-    subgraph Wait["AWS side"]
-        VER["Identity: Verified"]
-        PROD["Production access<br/>approved"]
-    end
-    subgraph D2["Deploy 2 (EMAIL_SIGNUP=on)"]
-        PE["User pool email via SES<br/>no-reply@kirangunturu.com"]
-        SU["Self sign-up on,<br/>COGNITO + Google providers"]
-        TR["Pre sign-up trigger<br/>AccountLinker"]
-        UI["Welcome page:<br/>Google + Sign up with email"]
-    end
-    D1 --> VER --> PROD --> D2
+    A["Deploy 1<br/>SES identity, DKIM,<br/>MAIL FROM, DMARC"] --> B["AWS<br/>domain verified,<br/>production access"] --> C["Deploy 2: EMAIL_SIGNUP=on<br/>Cognito sends via SES,<br/>email sign-up + linking"]
 ```
 
 **One person, one account.** If someone signs up with email and later uses Google with the same
@@ -400,17 +307,12 @@ address, they would end up as two Cognito users with two scores. The pre sign-up
 (`infra/api/presignup.py`) prevents that:
 
 ```mermaid
-flowchart TD
-    T["Cognito pre sign-up trigger"] --> S{"triggerSource"}
-    S -->|"PreSignUp_ExternalProvider<br/>(first Google sign-in)"| L["ListUsers email = address"]
-    L --> E{"Existing email account?"}
-    E -->|"CONFIRMED"| LINK["AdminLinkProviderForUser<br/>Google identity → existing user<br/>(same sub, same scores)"]
-    E -->|"UNCONFIRMED"| DEL["AdminDeleteUser<br/>never proved the address,<br/>so never link to it"]
-    E -->|"none"| NEW["continue: new Google user"]
-    S -->|"PreSignUp_SignUp<br/>(email sign-up)"| L2["ListUsers email = address"]
-    L2 --> F{"Address already uses Google?"}
-    F -->|yes| REF["refuse:<br/>'Continue with Google instead'"]
-    F -->|no| OK["continue: send code via SES"]
+flowchart LR
+    T["Pre sign-up<br/>trigger"] -->|first Google sign-in| G{"Email account<br/>with same address?"}
+    G -->|confirmed| L["Link Google to it"]
+    G -->|unconfirmed| D["Delete it"]
+    T -->|email sign-up| E{"Address already<br/>uses Google?"}
+    E -->|yes| X["Refuse"]
 ```
 
 Cognito fails the one sign-in during which it links accounts ("Already found an entry for
@@ -437,23 +339,14 @@ identity only from the verified token claims (`sub`), never from the request bod
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant B as Browser
-    participant L as Lambda handler
-    participant Q as S3 question bucket
-    participant D as DynamoDB Leaderboard
-    participant C as Cognito
-
-    B->>L: GET /api/questions/dynamodb
-    L->>Q: get questions/dynamodb.json<br/>(cached 5 min in the warm function)
-    L->>B: prompts + options + need<br/>(no answers)
-    Note over B: user picks options
-    B->>L: POST /api/answer {qid, picked}
-    L->>L: validate ids, grade:<br/>set(picked) == set(answer)
-    L->>C: AdminGetUser (name, cached)
-    L->>D: TransactWriteItems for board ALL:<br/>put credit marker if not exists<br/>+ ADD points 1 if correct
-    L->>D: same for this week's board,<br/>marker expires via TTL
-    L->>B: correct, answer, explanation,<br/>point: true only on a correct first answer
+    participant L as Lambda
+    participant D as DynamoDB
+    B->>L: GET questions (no answers)
+    B->>L: POST answer {qid, picked}
+    L->>L: grade on the server
+    L->>D: transaction: first-answer marker + point
+    L-->>B: correct?, answer, explanation, +1 point?
 ```
 
 Input is validated before anything is stored. Bodies are capped at 64 KB, IDs must match strict
@@ -508,21 +401,16 @@ The `Progress` table is one item per user (`userId` = Cognito `sub`) holding a s
 The domain is registered in Route 53, which created the hosted zone. Everything else is declared in
 the stack:
 
-```mermaid
-flowchart LR
-    Z["Hosted zone<br/>kirangunturu.com"]
-    Z --> A1["kirangunturu.com<br/>A/AAAA alias → CloudFront<br/>(homepage)"]
-    Z --> A2["cloud.kirangunturu.com<br/>A/AAAA alias → CloudFront<br/>(quiz)"]
-    Z --> A3["auth.kirangunturu.com<br/>A alias → Cognito's CloudFront<br/>(sign-in pages)"]
-    Z --> V1["_xxxx.cloud / apex / auth<br/>CNAMEs: ACM DNS validation"]
-    Z --> V2["3 × _domainkey CNAMEs<br/>SES DKIM"]
-    Z --> V3["mail.kirangunturu.com<br/>MX + SPF TXT (MAIL FROM)"]
-    Z --> V4["_dmarc TXT"]
-    Z --> V5["apex TXT<br/>google-site-verification"]
-    CERT["ACM certificate (us-east-1)<br/>cloud + apex + auth"] -.-> A1
-    CERT -.-> A2
-    CERT -.-> A3
-```
+| Record | Points to | Why |
+|---|---|---|
+| `kirangunturu.com` A/AAAA | CloudFront | homepage (and required parent for `auth.`) |
+| `cloud.kirangunturu.com` A/AAAA | CloudFront | the quiz |
+| `auth.kirangunturu.com` A | Cognito's CloudFront | sign-in pages |
+| `_xxxx` CNAMEs | ACM | certificate validation |
+| 3 × `_domainkey` CNAMEs | SES | DKIM signing |
+| `mail.kirangunturu.com` MX + TXT | SES | custom MAIL FROM (SPF) |
+| `_dmarc` TXT | (none) | DMARC policy |
+| apex TXT | (none) | Google Search Console verification |
 
 - One free ACM certificate covers all three names and renews itself.
 - `auth.kirangunturu.com` replaces the default `quiz-xxxx.auth.us-east-1.amazoncognito.com`. Google's
@@ -618,24 +506,25 @@ Where the user was had nothing to do with it. CloudFront's price class (North Am
 only adds latency for visitors in India; it doesn't cause errors.
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Before
         B1["Mixed quiz"] -->|"22 requests at once"| L1{"Lambda<br/>limit 10"}
         L1 -->|"10 run"| OK1["200"]
         L1 -->|"12 throttled"| E1["5xx → 'Questions didn't load'"]
     end
     subgraph After
-        B2["Mixed quiz"] -->|"~6 random topics,<br/>2 at a time"| L2{"Lambda<br/>limit 10 (→ 1,000)"}
+        B2["Mixed quiz"] -->|"~6 random topics,<br/>2 at a time"| L2{"Lambda<br/>limit 1,000"}
         L2 --> OK2["200"]
         L2 -.->|"rare 429/5xx"| R2["retry with backoff<br/>0.4s, 1.2s, 3.6s"] -.-> L2
     end
+    Before ~~~ After
 ```
 
 **How it was fixed.**
 
 | Layer | Change |
 |---|---|
-| Quota | Requested the standard 1,000 concurrent executions (Service Quotas → AWS Lambda → Concurrent executions, quota code `L-B99A9384`). |
+| Quota | Requested the standard 1,000 concurrent executions (Service Quotas → AWS Lambda → Concurrent executions, quota code `L-B99A9384`). AWS approved it the same day (2026-10-14). |
 | Mixed quiz | Loads about 6 random topics, 2 requests at a time, and adds more only if a difficulty filter leaves too few questions. "Retry missed" loads only the topics those questions came from. A mixed quiz went from 22 concurrent requests to at most 2. |
 | API client | Retries 429, 500, 502, 503 and 504 responses and network errors up to 3 times with exponential backoff and jitter (~0.4 s, 1.2 s, 3.6 s). |
 | Sign-in | Concurrent requests share one token refresh instead of each refreshing on its own. |
