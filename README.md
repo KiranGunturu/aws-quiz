@@ -16,7 +16,7 @@ diagram match the steps and the table below.
 
 ## How the data flows
 
-**Opening the site**
+**Opening the site**  
 
 1. The browser looks up `cloud.kirangunturu.com` in **Route 53**, which points it at CloudFront.
 2. **CloudFront** receives the request over HTTPS.
